@@ -9,17 +9,12 @@ jobs:
       - checkout
 
       - run:
-          name: Instalar dependencias
+          name: Instalar dependencias y correr pruebas
           command: |
             python -m venv venv
-            . venv/bin/activate
+            source venv/bin/activate
             pip install --upgrade pip
             pip install -r requirements.txt
-
-      - run:
-          name: Ejecutar tests (pytest)
-          command: |
-            . venv/bin/activate
             mkdir -p test-results
             pytest --junitxml=test-results/junit.xml
 
@@ -38,23 +33,15 @@ jobs:
       - checkout
 
       - run:
-          name: Instalar herramientas de análisis
+          name: Lint (flake8) y Seguridad (bandit)
           command: |
             python -m venv venv
-            . venv/bin/activate
+            source venv/bin/activate
             pip install --upgrade pip
             pip install flake8 bandit
-
-      - run:
-          name: Lint (flake8)
-          command: |
-            . venv/bin/activate
+            echo "=== Ejecutando flake8 ==="
             flake8 --max-line-length=120 .
-
-      - run:
-          name: Seguridad básica (bandit)
-          command: |
-            . venv/bin/activate
+            echo "=== Ejecutando bandit ==="
             bandit -r . -f json -o bandit-report.json || true
 
       - store_artifacts:
@@ -69,10 +56,10 @@ jobs:
       - run:
           name: Notificación resumen
           command: |
-            echo "CI/CD finalizado correctamente 🎉"
-            echo "Job 1: build_and_test (pytest)"
-            echo "Job 2: lint_and_security (flake8 + bandit)"
-            echo "Este mensaje sirve como notificación final del pipeline."
+            echo "CI/CD finalizado 🎉"
+            echo "Job 1: build_and_test (pytest OK)"
+            echo "Job 2: lint_and_security (flake8 + bandit OK)"
+            echo "Este paso actúa como notificación final del pipeline."
 
 workflows:
   ci_pipeline:
