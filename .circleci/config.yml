@@ -1,8 +1,5 @@
 version: 2.1
 
-orbs:
-  slack: circleci/slack@4.13.2
-
 jobs:
   build_and_test:
     docker:
@@ -23,6 +20,7 @@ jobs:
           name: Ejecutar tests (pytest)
           command: |
             . venv/bin/activate
+            mkdir -p test-results
             pytest --junitxml=test-results/junit.xml
 
       - store_test_results:
@@ -63,6 +61,19 @@ jobs:
           path: bandit-report.json
           destination: security/bandit-report.json
 
+  notify_summary:
+    docker:
+      - image: cimg/python:3.12
+    working_directory: ~/repo
+    steps:
+      - run:
+          name: Notificación resumen
+          command: |
+            echo "CI/CD finalizado correctamente 🎉"
+            echo "Job 1: build_and_test (pytest)"
+            echo "Job 2: lint_and_security (flake8 + bandit)"
+            echo "Este mensaje sirve como notificación final del pipeline."
+
 workflows:
   ci_pipeline:
     jobs:
@@ -70,11 +81,6 @@ workflows:
       - lint_and_security:
           requires:
             - build_and_test
-
-      # notificación final
-      - slack/notify:
+      - notify_summary:
           requires:
             - lint_and_security
-          channel: "#ci-alerts"
-          event: always
-          template: basic_success_1
