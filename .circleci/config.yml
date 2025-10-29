@@ -12,11 +12,10 @@ jobs:
           name: Instalar dependencias y correr pruebas
           command: |
             python -m venv venv
-            source venv/bin/activate
-            pip install --upgrade pip
-            pip install -r requirements.txt
+            ./venv/bin/pip install --upgrade pip
+            ./venv/bin/pip install -r requirements.txt
             mkdir -p test-results
-            pytest --junitxml=test-results/junit.xml
+            ./venv/bin/pytest --junitxml=test-results/junit.xml
 
       - store_test_results:
           path: test-results
@@ -36,13 +35,12 @@ jobs:
           name: Lint (flake8) y Seguridad (bandit)
           command: |
             python -m venv venv
-            source venv/bin/activate
-            pip install --upgrade pip
-            pip install flake8 bandit
+            ./venv/bin/pip install --upgrade pip
+            ./venv/bin/pip install flake8 bandit
             echo "=== Ejecutando flake8 ==="
-            flake8 --max-line-length=120 .
+            ./venv/bin/flake8 --max-line-length=120 .
             echo "=== Ejecutando bandit ==="
-            bandit -r . -f json -o bandit-report.json || true
+            ./venv/bin/bandit -r . -f json -o bandit-report.json || true
 
       - store_artifacts:
           path: bandit-report.json
