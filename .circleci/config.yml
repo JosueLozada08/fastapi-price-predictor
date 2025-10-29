@@ -1,0 +1,80 @@
+version: 2.1
+
+orbs:
+  slack: circleci/slack@4.13.2
+
+jobs:
+  build_and_test:
+    docker:
+      - image: cimg/python:3.12
+    working_directory: ~/repo
+    steps:
+      - checkout
+
+      - run:
+          name: Instalar dependencias
+          command: |
+            python -m venv venv
+            . venv/bin/activate
+            pip install --upgrade pip
+            pip install -r requirements.txt
+
+      - run:
+          name: Ejecutar tests (pytest)
+          command: |
+            . venv/bin/activate
+            pytest --junitxml=test-results/junit.xml
+
+      - store_test_results:
+          path: test-results
+
+      - store_artifacts:
+          path: test-results
+          destination: test-results
+
+  lint_and_security:
+    docker:
+      - image: cimg/python:3.12
+    working_directory: ~/repo
+    steps:
+      - checkout
+
+      - run:
+          name: Instalar herramientas de análisis
+          command: |
+            python -m venv venv
+            . venv/bin/activate
+            pip install --upgrade pip
+            pip install flake8 bandit
+
+      - run:
+          name: Lint (flake8)
+          command: |
+            . venv/bin/activate
+            flake8 --max-line-length=120 .
+
+      - run:
+          name: Seguridad básica (bandit)
+          command: |
+            . venv/bin/activate
+            bandit -r . -f json -o bandit-report.json || true
+
+      - store_artifacts:
+          path: bandit-report.json
+          destination: security/bandit-report.json
+
+workflows:
+  ci_pipeline:
+    jobs:
+      - build_and_test
+      - lint_and_security:
+          requires:
+            - build_and_test
+
+      # notificación final
+      - slack/notify:
+          requires:
+            - lint_and_security
+          channel: "#ci-alerts"
+          event: always
+          template: basic_success_1
