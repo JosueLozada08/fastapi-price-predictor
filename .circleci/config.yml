@@ -14,20 +14,20 @@ jobs:
             python -m venv venv
             ./venv/bin/pip install --upgrade pip
             ./venv/bin/pip install -r requirements.txt
-            ./venv/bin/pip install coverage
+            ./venv/bin/pip install coverage pytest
 
       - run:
           name: Ejecutar pruebas con coverage y generar reportes
           command: |
             mkdir -p test-results
             mkdir -p coverage-results
-            # correr pytest envuelto por coverage
+            # Ejecutar pytest envuelto en coverage
             ./venv/bin/coverage run -m pytest --junitxml=test-results/junit.xml
-            # generar reporte XML (para Sonar / para histórico)
+            # Generar reporte XML de cobertura (para Sonar / histórico)
             ./venv/bin/coverage xml -o coverage-results/coverage.xml
-            # generar reporte legible en consola
+            # Reporte en texto y fail si cobertura baja de 70%
             ./venv/bin/coverage report --fail-under=70
-            # ^^^ cambia 70 por el porcentaje mínimo aceptable de cobertura
+            # Puedes subir el % mínimo cambiando 70 por 80/90 según lo estricto que quieras
 
       - store_test_results:
           path: test-results
@@ -65,7 +65,7 @@ jobs:
       - run:
           name: Escaneo de seguridad estática (bandit)
           command: |
-            echo "=== Ejecutando bandit (incluso busca patrones peligrosos tipo eval) ==="
+            echo "=== Ejecutando bandit (patrones inseguros, malas prácticas peligrosas) ==="
             ./venv/bin/bandit -r . -x venv \
               -f json -o bandit-report.json || true
 
@@ -83,7 +83,7 @@ jobs:
           path: pip-audit-report.json
           destination: security/pip-audit-report.json
 
-    sonar_scan:
+  sonar_scan:
     docker:
       - image: cimg/python:3.12
     working_directory: ~/repo
@@ -118,6 +118,7 @@ jobs:
           name: Ejecutar análisis SonarCloud / SonarQube (no romper si falla)
           command: |
             echo "=== Lanzando análisis estático con Sonar ==="
+            echo "Si no configuraste variables SONAR_HOST_URL / SONAR_TOKEN etc., este paso igual marcará Success."
             set +e
             ./sonar-scanner/bin/sonar-scanner \
               -Dsonar.projectKey="$SONAR_PROJECT_KEY" \
@@ -133,13 +134,12 @@ jobs:
               -Dsonar.coverageReportPaths=coverage-results/coverage.xml \
               -Dsonar.python.coverage.reportPaths=coverage-results/coverage.xml
             EXIT_CODE=$?
-            echo "Sonar exit code: $EXIT_CODE (continuamos igual para fines académicos)"
+            echo "Sonar exit code: $EXIT_CODE (no bloqueamos el pipeline en entorno académico)"
             exit 0
 
       - store_artifacts:
           path: coverage-results/coverage.xml
           destination: sonar/coverage.xml
-
 
   notify_summary:
     docker:
@@ -150,10 +150,10 @@ jobs:
           name: Resumen final del pipeline
           command: |
             echo "CI/CD finalizado ✅"
-            echo "✔ build_and_test: pruebas unitarias + cobertura"
-            echo "✔ lint_and_security: estilo, bandit (código inseguro), pip-audit (deps inseguras)"
-            echo "✔ sonar_scan: calidad, duplicación, code smells, cobertura enviada a Sonar"
-            echo "Este mensaje actúa como notificación final del pipeline."
+            echo "✔ build_and_test: pruebas unitarias + cobertura mínima exigida"
+            echo "✔ lint_and_security: flake8, bandit (seguridad del código), pip-audit (vulnerabilidades en dependencias)"
+            echo "✔ sonar_scan: análisis de calidad y cobertura enviada a Sonar (con fallback seguro)"
+            echo "Este paso actúa como notificación final del pipeline."
 
 workflows:
   ci_pipeline:
