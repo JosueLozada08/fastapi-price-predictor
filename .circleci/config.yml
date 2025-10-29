@@ -9,13 +9,25 @@ jobs:
       - checkout
 
       - run:
-          name: Instalar dependencias y correr pruebas
+          name: Crear entorno e instalar dependencias del proyecto (app + test + cobertura)
           command: |
             python -m venv venv
             ./venv/bin/pip install --upgrade pip
             ./venv/bin/pip install -r requirements.txt
+            ./venv/bin/pip install coverage
+
+      - run:
+          name: Ejecutar pruebas con coverage y generar reportes
+          command: |
             mkdir -p test-results
-            ./venv/bin/pytest --junitxml=test-results/junit.xml
+            mkdir -p coverage-results
+            # correr pytest envuelto por coverage
+            ./venv/bin/coverage run -m pytest --junitxml=test-results/junit.xml
+            # generar reporte XML (para Sonar / para histórico)
+            ./venv/bin/coverage xml -o coverage-results/coverage.xml
+            # generar reporte legible en consola
+            ./venv/bin/coverage report --fail-under=70
+            # ^^^ cambia 70 por el porcentaje mínimo aceptable de cobertura
 
       - store_test_results:
           path: test-results
@@ -23,6 +35,10 @@ jobs:
       - store_artifacts:
           path: test-results
           destination: test-results
+
+      - store_artifacts:
+          path: coverage-results
+          destination: coverage-results
 
   lint_and_security:
     docker:
@@ -32,21 +48,111 @@ jobs:
       - checkout
 
       - run:
-          name: Lint (flake8) y Seguridad (bandit)
+          name: Crear entorno e instalar herramientas de análisis estático / seguridad
           command: |
             python -m venv venv
             ./venv/bin/pip install --upgrade pip
-            ./venv/bin/pip install flake8 bandit
+            ./venv/bin/pip install flake8 bandit pip-audit
 
-            echo "=== Ejecutando flake8 SOLO en nuestro código ==="
-            ./venv/bin/flake8 app.py model.py test_app.py --max-line-length=120 --ignore=E302,E501,E203,F401,F821
+      - run:
+          name: Lint (flake8) sobre el código del proyecto
+          command: |
+            echo "=== Ejecutando flake8 SOLO en el código fuente ==="
+            ./venv/bin/flake8 app.py model.py test_app.py \
+              --max-line-length=120 \
+              --ignore=E302,E501,E203,F401,F821
 
-            echo "=== Ejecutando bandit para revisar seguridad ==="
-            ./venv/bin/bandit -r . -x venv -f json -o bandit-report.json || true
+      - run:
+          name: Escaneo de seguridad estática (bandit)
+          command: |
+            echo "=== Ejecutando bandit (incluso busca patrones peligrosos tipo eval) ==="
+            ./venv/bin/bandit -r . -x venv \
+              -f json -o bandit-report.json || true
+
+      - run:
+          name: Escaneo de dependencias vulnerables (pip-audit)
+          command: |
+            echo "=== Ejecutando pip-audit para CVEs en dependencias ==="
+            ./venv/bin/pip-audit --format json --output pip-audit-report.json || true
 
       - store_artifacts:
           path: bandit-report.json
           destination: security/bandit-report.json
+
+      - store_artifacts:
+          path: pip-audit-report.json
+          destination: security/pip-audit-report.json
+
+  sonar_scan:
+    docker:
+      - image: cimg/python:3.12
+    working_directory: ~/repo
+    steps:
+      - checkout
+
+      - run:
+          name: Preparar entorno (instalar sonar-scanner CLI)
+          command: |
+            # Instalamos Java porque el sonar-scanner clásico lo usa.
+            sudo apt-get update
+            sudo apt-get install -y openjdk-17-jre-headless curl unzip
+
+            # Descargar sonar-scanner de forma estándar
+            curl -sSLo sonar-scanner.zip \
+              https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-linux.zip
+
+            unzip sonar-scanner.zip
+            mv sonar-scanner-* sonar-scanner
+            chmod +x sonar-scanner/bin/sonar-scanner
+
+            # Moverlo a un sitio accesible
+            echo 'export PATH=$PATH:~/repo/sonar-scanner/bin' >> $BASH_ENV
+            source $BASH_ENV
+
+      - run:
+          name: Traer reportes de cobertura para Sonar
+          command: |
+            # recrear coverage-results en este job porque es otro contenedor
+            python -m venv venv
+            ./venv/bin/pip install --upgrade pip
+            ./venv/bin/pip install -r requirements.txt
+            ./venv/bin/pip install coverage pytest
+            mkdir -p coverage-results
+            ./venv/bin/coverage run -m pytest
+            ./venv/bin/coverage xml -o coverage-results/coverage.xml
+
+      - run:
+          name: Ejecutar análisis SonarCloud / SonarQube
+          command: |
+            echo "=== Lanzando análisis estático con Sonar ==="
+            # IMPORTANTE:
+            # Debes definir en CircleCI > Project Settings > Environment Variables:
+            # SONAR_TOKEN          -> token de proyecto/usuario en SonarCloud / SonarQube
+            # SONAR_PROJECT_KEY    -> ej: JosueLozada08_fastapi-price-predictor
+            # SONAR_ORG            -> ej: tu_org_en_sonarcloud (solo SonarCloud)
+            # SONAR_HOST_URL       -> ej: https://sonarcloud.io  (o URL de tu SonarQube)
+
+            ./sonar-scanner/bin/sonar-scanner \
+              -Dsonar.projectKey="$SONAR_PROJECT_KEY" \
+              -Dsonar.organization="$SONAR_ORG" \
+              -Dsonar.host.url="$SONAR_HOST_URL" \
+              -Dsonar.login="$SONAR_TOKEN" \
+              -Dsonar.language=py \
+              -Dsonar.sources=. \
+              -Dsonar.exclusions=venv/**,.circleci/** \
+              -Dsonar.python.version=3.12 \
+              -Dsonar.tests=. \
+              -Dsonar.test.inclusions=test_*.py,**/test_*.py \
+              -Dsonar.coverageReportPaths=coverage-results/coverage.xml \
+              -Dsonar.python.coverage.reportPaths=coverage-results/coverage.xml
+
+            # Nota:
+            # - Para SonarCloud necesitas SONAR_ORG y host https://sonarcloud.io
+            # - Para SonarQube self-hosted puedes omitir "-Dsonar.organization" y usar tu URL interna
+
+      - store_artifacts:
+          path: coverage-results/coverage.xml
+          destination: sonar/coverage.xml
 
   notify_summary:
     docker:
@@ -54,12 +160,13 @@ jobs:
     working_directory: ~/repo
     steps:
       - run:
-          name: Notificación resumen
+          name: Resumen final del pipeline
           command: |
-            echo "CI/CD finalizado 🎉"
-            echo "Job 1: build_and_test (pytest OK)"
-            echo "Job 2: lint_and_security (flake8 + bandit OK)"
-            echo "Este paso actúa como notificación final del pipeline."
+            echo "CI/CD finalizado ✅"
+            echo "✔ build_and_test: pruebas unitarias + cobertura"
+            echo "✔ lint_and_security: estilo, bandit (código inseguro), pip-audit (deps inseguras)"
+            echo "✔ sonar_scan: calidad, duplicación, code smells, cobertura enviada a Sonar"
+            echo "Este mensaje actúa como notificación final del pipeline."
 
 workflows:
   ci_pipeline:
@@ -68,6 +175,9 @@ workflows:
       - lint_and_security:
           requires:
             - build_and_test
-      - notify_summary:
+      - sonar_scan:
           requires:
             - lint_and_security
+      - notify_summary:
+          requires:
+            - sonar_scan
