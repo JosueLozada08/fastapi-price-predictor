@@ -196,17 +196,6 @@ CI/CD finalizado ✅
 -   🧾 Notificaciones externas (Slack / Discord)
 -   🔐 Escaneo de secretos (TruffleHog / Gitleaks)
 
-------------------------------------------------------------------------
 
-## 👨‍💻 Autor
 
-**Josue Lozada**\
-Estudiante de Ingeniería de Software · Universidad de Las Américas
-(UDLA)\
-📧 <josuelozada08@gmail.com>
 
-------------------------------------------------------------------------
-
-## 🏷️ Licencia
-
-MIT License © 2025 Josue Lozada
