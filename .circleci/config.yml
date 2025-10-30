@@ -16,8 +16,14 @@ jobs:
             python -m venv venv
             ./venv/bin/pip install --upgrade pip
             ./venv/bin/pip install -r requirements.txt
+            # Agregamos pytest-cov para soporte de cobertura
+            ./venv/bin/pip install pytest pytest-cov coverage
             mkdir -p test-results coverage-results
-            ./venv/bin/pytest --junitxml=test-results/junit.xml --cov=. --cov-report=xml:coverage-results/coverage.xml --cov-fail-under=70
+            ./venv/bin/pytest \
+              --junitxml=test-results/junit.xml \
+              --cov=. \
+              --cov-report=xml:coverage-results/coverage.xml \
+              --cov-fail-under=70
       - store_test_results:
           path: test-results
       - store_artifacts:
@@ -63,13 +69,13 @@ jobs:
           name: Generar cobertura para Sonar
           command: |
             python -m venv venv
-            ./venv/bin/pip install -r requirements.txt pytest coverage
+            ./venv/bin/pip install -r requirements.txt
+            ./venv/bin/pip install pytest pytest-cov coverage
             ./venv/bin/pytest --cov=. --cov-report=xml:sonar/coverage.xml
       - run:
           name: Ejecutar análisis SonarCloud (con fallback)
           command: |
             ./venv/bin/pip install sonar-scanner-cli
-            echo "=== Lanzando análisis Sonar ==="
             sonar-scanner \
               -Dsonar.projectKey=$SONAR_PROJECT_KEY \
               -Dsonar.organization=$SONAR_ORG \
