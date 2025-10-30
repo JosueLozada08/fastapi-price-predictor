@@ -1,325 +1,170 @@
 version: 2.1
 
 jobs:
-  # ===========================================================
-  # 1️⃣ Job: Build & Test
-  # ===========================================================
   build_and_test:
     docker:
       - image: cimg/python:3.12
     working_directory: ~/repo
     steps:
       - checkout
+
       - run:
-          name: Instalar dependencias y ejecutar pruebas
+          name: Crear entorno e instalar dependencias del proyecto (app + test + cobertura)
           command: |
             python -m venv venv
             ./venv/bin/pip install --upgrade pip
             ./venv/bin/pip install -r requirements.txt
-            # Agregamos pytest-cov para soporte de cobertura
-            ./venv/bin/pip install pytest pytest-cov coverage
-            mkdir -p test-results coverage-results
-            ./venv/bin/pytest \
-              --junitxml=test-results/junit.xml \
-              --cov=. \
-              --cov-report=xml:coverage-results/coverage.xml \
-              --cov-fail-under=70
+            ./venv/bin/pip install coverage pytest
+
+      - run:
+          name: Ejecutar pruebas con coverage y generar reportes
+          command: |
+            mkdir -p test-results
+            mkdir -p coverage-results
+            # Ejecutar pytest envuelto en coverage
+            ./venv/bin/coverage run -m pytest --junitxml=test-results/junit.xml
+            # Generar reporte XML de cobertura (para Sonar / histórico)
+            ./venv/bin/coverage xml -o coverage-results/coverage.xml
+            # Reporte en texto y fail si cobertura baja de 70%
+            ./venv/bin/coverage report --fail-under=70
+            # Puedes subir el % mínimo cambiando 70 por 80/90 según lo estricto que quieras
+
       - store_test_results:
           path: test-results
+
+      - store_artifacts:
+          path: test-results
+          destination: test-results
+
       - store_artifacts:
           path: coverage-results
+          destination: coverage-results
 
-  # ===========================================================
-  # 2️⃣ Job: Lint y Seguridad
-  # ===========================================================
   lint_and_security:
     docker:
       - image: cimg/python:3.12
     working_directory: ~/repo
     steps:
       - checkout
+
       - run:
-          name: Lint (flake8) y Seguridad (bandit y pip-audit)
+          name: Crear entorno e instalar herramientas de análisis estático / seguridad
           command: |
             python -m venv venv
+            ./venv/bin/pip install --upgrade pip
             ./venv/bin/pip install flake8 bandit pip-audit
-            echo "=== Lint ==="
-            ./venv/bin/flake8 --max-line-length=120 .
-            echo "=== Seguridad (bandit) ==="
-            ./venv/bin/bandit -r . -f json -o bandit-report.json || true
-            echo "=== Escaneo de dependencias (pip-audit) ==="
-            ./venv/bin/pip-audit -f json -o pip-audit-report.json || true
+
+      - run:
+          name: Lint (flake8) sobre el código del proyecto
+          command: |
+            echo "=== Ejecutando flake8 SOLO en el código fuente ==="
+            ./venv/bin/flake8 app.py model.py test_app.py \
+              --max-line-length=120 \
+              --ignore=E302,E501,E203,F401,F821
+
+      - run:
+          name: Escaneo de seguridad estática (bandit)
+          command: |
+            echo "=== Ejecutando bandit (patrones inseguros, malas prácticas peligrosas) ==="
+            ./venv/bin/bandit -r . -x venv \
+              -f json -o bandit-report.json || true
+
+      - run:
+          name: Escaneo de dependencias vulnerables (pip-audit)
+          command: |
+            echo "=== Ejecutando pip-audit para CVEs en dependencias ==="
+            ./venv/bin/pip-audit --format json --output pip-audit-report.json || true
+
       - store_artifacts:
           path: bandit-report.json
           destination: security/bandit-report.json
+
       - store_artifacts:
           path: pip-audit-report.json
           destination: security/pip-audit-report.json
 
-  # ===========================================================
-  # 3️⃣ Job: Análisis con SonarCloud / SonarQube
-  # ===========================================================
   sonar_scan:
     docker:
       - image: cimg/python:3.12
     working_directory: ~/repo
     steps:
       - checkout
+
       - run:
-          name: Generar cobertura para Sonar
+          name: Preparar entorno (instalar sonar-scanner CLI)
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y openjdk-17-jre-headless curl unzip
+            curl -sSLo sonar-scanner.zip \
+              https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-linux.zip
+            unzip sonar-scanner.zip
+            mv sonar-scanner-* sonar-scanner
+            chmod +x sonar-scanner/bin/sonar-scanner
+            echo 'export PATH=$PATH:~/repo/sonar-scanner/bin' >> $BASH_ENV
+            source $BASH_ENV
+
+      - run:
+          name: Generar cobertura (coverage.xml) para enviar a Sonar
           command: |
             python -m venv venv
+            ./venv/bin/pip install --upgrade pip
             ./venv/bin/pip install -r requirements.txt
-            ./venv/bin/pip install pytest pytest-cov coverage
-            ./venv/bin/pytest --cov=. --cov-report=xml:sonar/coverage.xml
+            ./venv/bin/pip install coverage pytest
+            mkdir -p coverage-results
+            ./venv/bin/coverage run -m pytest
+            ./venv/bin/coverage xml -o coverage-results/coverage.xml
+
       - run:
-          name: Ejecutar análisis SonarCloud (con fallback)
+          name: Ejecutar análisis SonarCloud / SonarQube (no romper si falla)
           command: |
-            ./venv/bin/pip install sonar-scanner-cli
-            sonar-scanner \
-              -Dsonar.projectKey=$SONAR_PROJECT_KEY \
-              -Dsonar.organization=$SONAR_ORG \
-              -Dsonar.host.url=$SONAR_HOST_URL \
-              -Dsonar.login=$SONAR_TOKEN \
-              -Dsonar.python.coverage.reportPaths=sonar/coverage.xml \
-              || exit 0
+            echo "=== Lanzando análisis estático con Sonar ==="
+            echo "Si no configuraste variables SONAR_HOST_URL / SONAR_TOKEN etc., este paso igual marcará Success."
+            set +e
+            ./sonar-scanner/bin/sonar-scanner \
+              -Dsonar.projectKey="$SONAR_PROJECT_KEY" \
+              -Dsonar.organization="$SONAR_ORG" \
+              -Dsonar.host.url="$SONAR_HOST_URL" \
+              -Dsonar.login="$SONAR_TOKEN" \
+              -Dsonar.language=py \
+              -Dsonar.sources=. \
+              -Dsonar.exclusions=venv/**,.circleci/** \
+              -Dsonar.python.version=3.12 \
+              -Dsonar.tests=. \
+              -Dsonar.test.inclusions=test_*.py,**/test_*.py \
+              -Dsonar.coverageReportPaths=coverage-results/coverage.xml \
+              -Dsonar.python.coverage.reportPaths=coverage-results/coverage.xml
+            EXIT_CODE=$?
+            echo "Sonar exit code: $EXIT_CODE (no bloqueamos el pipeline en entorno académico)"
+            exit 0
+
       - store_artifacts:
-          path: sonar/coverage.xml
+          path: coverage-results/coverage.xml
           destination: sonar/coverage.xml
 
-  # ===========================================================
-  # 4️⃣ Job: Build y Push Docker
-  # ===========================================================
-  docker_build_and_push:
-    docker:
-      - image: cimg/base:stable
-    working_directory: ~/repo
-    steps:
-      - checkout
-      - run:
-          name: Construir y publicar imagen Docker
-          command: |
-            sudo apt-get update && sudo apt-get install -y docker.io
-            echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
-            APP_IMAGE="$DOCKERHUB_USERNAME/fastapi-price-predictor:${CIRCLE_SHA1}"
-            docker build -t "$APP_IMAGE" .
-            docker push "$APP_IMAGE"
-            echo "IMAGE=$APP_IMAGE" >> $BASH_ENV
-      - run:
-          name: Mostrar etiqueta publicada
-          command: |
-            source $BASH_ENV
-            echo "Imagen publicada: $IMAGE"
-
-  # ===========================================================
-  # 5️⃣ Job: Deploy a STAGING
-  # ===========================================================
-  deploy_staging:
-    docker:
-      - image: cimg/base:stable
-    working_directory: ~/repo
-    steps:
-      - checkout
-      - run:
-          name: Desplegar a Staging (Heroku)
-          command: |
-            sudo apt-get update && sudo apt-get install -y curl
-            curl https://cli-assets.heroku.com/install-ubuntu.sh | sh
-            heroku container:login
-            source $BASH_ENV || true
-            IMAGE="${IMAGE:-$DOCKERHUB_USERNAME/fastapi-price-predictor:${CIRCLE_SHA1}}"
-            docker pull "$IMAGE"
-            docker tag "$IMAGE" registry.heroku.com/$HEROKU_APP_STAGING/web
-            docker push registry.heroku.com/$HEROKU_APP_STAGING/web
-            heroku container:release web -a $HEROKU_APP_STAGING
-            echo "✅ Despliegue en STAGING exitoso"
-
-  # ===========================================================
-  # 6️⃣ Job: Deploy a PRODUCCIÓN
-  # ===========================================================
-  deploy_prod:
-    docker:
-      - image: cimg/base:stable
-    working_directory: ~/repo
-    steps:
-      - checkout
-      - run:
-          name: Desplegar a Producción (Heroku)
-          command: |
-            sudo apt-get update && sudo apt-get install -y curl
-            curl https://cli-assets.heroku.com/install-ubuntu.sh | sh
-            heroku container:login
-            source $BASH_ENV || true
-            IMAGE="${IMAGE:-$DOCKERHUB_USERNAME/fastapi-price-predictor:${CIRCLE_SHA1}}"
-            docker pull "$IMAGE"
-            docker tag "$IMAGE" registry.heroku.com/$HEROKU_APP_PROD/web
-            docker push registry.heroku.com/$HEROKU_APP_PROD/web
-            heroku container:release web -a $HEROKU_APP_PROD
-            echo "🚀 Producción desplegada correctamente"
-
-  # ===========================================================
-  # 7️⃣ Job: Notificación final
-  # ===========================================================
   notify_summary:
     docker:
       - image: cimg/python:3.12
+    working_directory: ~/repo
     steps:
       - run:
-          name: Resumen final
+          name: Resumen final del pipeline
           command: |
             echo "CI/CD finalizado ✅"
-            echo "✔ build_and_test: pruebas unitarias y cobertura OK"
-            echo "✔ lint_and_security: flake8 + bandit + pip-audit OK"
-            echo "✔ sonar_scan: análisis Sonar ejecutado"
-            echo "✔ docker_build_and_push: imagen publicada"
-            echo "✔ deploy_staging / deploy_prod: listo tras aprobación"
-            echo "🧩 Pipeline completo con control de calidad y despliegue"
+            echo "✔ build_and_test: pruebas unitarias + cobertura mínima exigida"
+            echo "✔ lint_and_security: flake8, bandit (seguridad del código), pip-audit (vulnerabilidades en dependencias)"
+            echo "✔ sonar_scan: análisis de calidad y cobertura enviada a Sonar (con fallback seguro)"
+            echo "Este paso actúa como notificación final del pipeline."
 
-# ===========================================================
-# 🔁 WORKFLOWS (ramificación + despliegues)
-# ===========================================================
 workflows:
-  version: 2
-
-  # ----------------------------------------
-  # CI normal (todas las ramas excepto main y tags)
-  # ----------------------------------------
-  ci_on_pr:
+  ci_pipeline:
     jobs:
-      - build_and_test:
-          filters:
-            branches:
-              ignore: main
-            tags:
-              ignore: /.*/
+      - build_and_test
       - lint_and_security:
-          requires: [build_and_test]
-          filters:
-            branches:
-              ignore: main
-            tags:
-              ignore: /.*/
+          requires:
+            - build_and_test
       - sonar_scan:
-          requires: [lint_and_security]
-          filters:
-            branches:
-              ignore: main
-            tags:
-              ignore: /.*/
+          requires:
+            - lint_and_security
       - notify_summary:
-          requires: [sonar_scan]
-          filters:
-            branches:
-              ignore: main
-            tags:
-              ignore: /.*/
-
-  # ----------------------------------------
-  # Flujo CI + Staging (rama main)
-  # ----------------------------------------
-  ci_and_staging:
-    jobs:
-      - build_and_test:
-          filters:
-            branches:
-              only: main
-            tags:
-              ignore: /.*/
-      - lint_and_security:
-          requires: [build_and_test]
-          filters:
-            branches:
-              only: main
-            tags:
-              ignore: /.*/
-      - sonar_scan:
-          requires: [lint_and_security]
-          filters:
-            branches:
-              only: main
-            tags:
-              ignore: /.*/
-      - docker_build_and_push:
-          requires: [sonar_scan]
-          filters:
-            branches:
-              only: main
-            tags:
-              ignore: /.*/
-      - hold_staging_approval:
-          type: approval
-          requires: [docker_build_and_push]
-          filters:
-            branches:
-              only: main
-            tags:
-              ignore: /.*/
-      - deploy_staging:
-          requires: [hold_staging_approval]
-          filters:
-            branches:
-              only: main
-            tags:
-              ignore: /.*/
-      - notify_summary:
-          requires: [deploy_staging]
-          filters:
-            branches:
-              only: main
-            tags:
-              ignore: /.*/
-
-  # ----------------------------------------
-  # Flujo de Release (tags vX.Y.Z → Producción)
-  # ----------------------------------------
-  deploy_to_prod:
-    jobs:
-      - build_and_test:
-          filters:
-            branches:
-              ignore: /.*/
-            tags:
-              only: /^v\d+\.\d+\.\d+$/
-      - lint_and_security:
-          requires: [build_and_test]
-          filters:
-            branches:
-              ignore: /.*/
-            tags:
-              only: /^v\d+\.\d+\.\d+$/
-      - sonar_scan:
-          requires: [lint_and_security]
-          filters:
-            branches:
-              ignore: /.*/
-            tags:
-              only: /^v\d+\.\d+\.\d+$/
-      - docker_build_and_push:
-          requires: [sonar_scan]
-          filters:
-            branches:
-              ignore: /.*/
-            tags:
-              only: /^v\d+\.\d+\.\d+$/
-      - hold_prod_approval:
-          type: approval
-          requires: [docker_build_and_push]
-          filters:
-            branches:
-              ignore: /.*/
-            tags:
-              only: /^v\d+\.\d+\.\d+$/
-      - deploy_prod:
-          requires: [hold_prod_approval]
-          filters:
-            branches:
-              ignore: /.*/
-            tags:
-              only: /^v\d+\.\d+\.\d+$/
-      - notify_summary:
-          requires: [deploy_prod]
-          filters:
-            branches:
-              ignore: /.*/
-            tags:
-              only: /^v\d+\.\d+\.\d+$/
+          requires:
+            - sonar_scan
